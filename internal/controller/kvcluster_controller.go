@@ -40,11 +40,11 @@ type KVClusterReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters/finalizers,verbs=update
-//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=storage.mydatabase.io,resources=kvclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 func (r *KVClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -112,7 +112,7 @@ func (r *KVClusterReconciler) serviceForKVCluster(kvc *storagev1alpha1.KVCluster
 			},
 		},
 	}
-	controllerutil.SetControllerReference(kvc, svc, r.Scheme)
+	_ = controllerutil.SetControllerReference(kvc, svc, r.Scheme)
 	return svc
 }
 
