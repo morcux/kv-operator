@@ -1,133 +1,129 @@
-# kv-operator
+# KV-Operator: Distributed Database Controller
 
-**kv-operator** is a Kubernetes Operator built using [Kubebuilder](https://book.kubebuilder.io/) that automates the deployment and management of a distributed, Raft-based Key-Value store cluster.
+![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-Operator-326ce5?style=flat&logo=kubernetes)
+![Kubebuilder](https://img.shields.io/badge/Framework-Kubebuilder-blue?style=flat)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-The operator provides a Custom Resource Definition (CRD) called `KVCluster`, which allows users to easily spin up a fully configured stateful database cluster with a specific number of nodes.
+**KV-Operator** is a Kubernetes Operator built in Go using the [Kubebuilder](https://book.kubebuilder.io/) framework. It extends the Kubernetes API by introducing a `KVCluster` Custom Resource Definition (CRD), which completely automates the deployment and configuration of a distributed, Raft-based Key-Value store.
 
-## Features
+Managing stateful applications on Kubernetes is notoriously complex. This operator encodes the "Day 1" operational knowledge required to bootstrap a Raft consensus cluster into an automated software loop.
 
-- **Automated Deployment**: Automatically provisions a `StatefulSet` with the requested number of replicas (nodes).
-- **Persistent Storage**: Automatically creates Persistent Volume Claims (PVC) for data storage (`/app/raft-data`).
-- **Network Configuration**: Configures a Headless Service to enable stable network identities and Raft peer discovery.
-- **Raft Bootstrapping**: Automatically injects standard configuration parameters (`NODE_ID`, `SEED_NODE_ID`, `SEED_NODE_ADDR`) to let the cluster seamlessly discover and join the Raft group.
+## ✨ Key Engineering Features
 
----
+*   **Custom Resource Definition (CRD):** Extends the Kubernetes API, allowing users to define a database cluster declaratively (e.g., `size: 3`).
+*   **Stateful Workload Management:** Automatically provisions `StatefulSets` to ensure ordered deployment, stable network identifiers, and sticky persistent storage (`PersistentVolumeClaims`) for the Write-Ahead Log (WAL) and Raft data.
+*   **Automated Raft Bootstrapping:** Dynamically injects topology information into the pods. It sets `SEED_NODE_ID` and calculates the `SEED_NODE_ADDR` via a Headless Service so that replicas `1` to `N` automatically discover and join replica `0` to form a consensus quorum.
+*   **Idempotent Reconciliation:** The controller continuously watches the cluster state. If a resource (Service, StatefulSet) is deleted or modified manually, the operator instantly reverts it back to the desired state.
+*   **RBAC & Least Privilege:** Uses tightly scoped ServiceAccounts and ClusterRoles generated via Kubebuilder markers.
+
+## 🏗 Architecture & Reconciliation Loop
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant K8s API
+    participant KV-Operator
+    participant StatefulSet
+    participant Headless Service
+
+    User->>K8s API: kubectl apply -f kvcluster.yaml
+    K8s API-->>KV-Operator: Event: KVCluster Created
+    
+    KV-Operator->>K8s API: Check if Headless Service exists
+    alt Does not exist
+        KV-Operator->>Headless Service: Create Service (ClusterIP: None)
+    end
+    
+    KV-Operator->>K8s API: Check if StatefulSet exists
+    alt Does not exist
+        KV-Operator->>StatefulSet: Create StatefulSet (N Replicas, PVCs)
+        KV-Operator->>StatefulSet: Inject SEED_NODE_ADDR env var
+    end
+    
+    StatefulSet-->>K8s API: Pod-0 (Seed Node) starts
+    StatefulSet-->>K8s API: Pod-1 starts, connects to Pod-0 (Raft Join)
+    StatefulSet-->>K8s API: Pod-2 starts, connects to Pod-0 (Raft Join)
+```
 
 ## 🚀 Getting Started
 
 ### Prerequisites
+*   Go 1.25+
+*   Docker
+*   `kubectl` & a running Kubernetes cluster (e.g., [Kind](https://kind.sigs.k8s.io/) or Minikube)
 
-- Go version v1.22+ or v1.24+
-- Docker version 17.03+
-- `kubectl` version v1.11.3+
-- A running Kubernetes cluster (e.g., [Kind](https://kind.sigs.k8s.io/) or [Minikube](https://minikube.sigs.k8s.io/) for local development)
+### 1. Install CRDs
+Install the `KVCluster` Custom Resource Definition into your cluster:
+```bash
+make install
+```
 
-### Deploying on a cluster
+### 2. Run the Operator (Local Development)
+You can run the operator process locally on your machine. It will connect to the cluster specified in your `~/.kube/config`:
+```bash
+make run
+```
+*(Keep this terminal open, and open a new one for the next steps)*
 
-1. **Install the Custom Resource Definitions (CRDs) into the cluster:**
-
-   ```sh
-   make install
-   ```
-
-2. **Run the controller locally (for development):**
-
-   ```sh
-   make run
-   ```
-   *Note: This will run the controller process outside of the K8s cluster right on your machine, communicating with the cluster via your `kubeconfig`.*
-
-3. **Deploy the Operator to the cluster:**
-
-   If you want to run the Operator as a Pod inside the cluster:
-   ```sh
-   make docker-build docker-push IMG=<some-registry>/kv-operator:tag
-   make deploy IMG=<some-registry>/kv-operator:tag
-   ```
-
-### 📦 Creating a `KVCluster`
-
-Once the operator is running (either via `make run` or deployed), you can create an instance of a Key-Value cluster by applying a `KVCluster` custom resource.
-
-Create a file named `my-cluster.yaml`:
-
+### 3. Deploy a Database Cluster
+Create a file named `sample-cluster.yaml`:
 ```yaml
 apiVersion: storage.mydatabase.io/v1alpha1
 kind: KVCluster
 metadata:
-  name: sample-kv-cluster
+  name: my-raft-db
+  namespace: default
 spec:
-  size: 3 # Number of nodes in the Raft cluster
+  size: 3 # Number of nodes in the consensus group
 ```
 
-Apply it to the cluster:
-
-```sh
-kubectl apply -f my-cluster.yaml
+Apply the Custom Resource:
+```bash
+kubectl apply -f sample-cluster.yaml
 ```
 
-The operator will immediately intercept this request and create:
-- A Headless Service named `sample-kv-cluster-service`.
-- A StatefulSet named `sample-kv-cluster` with `3` replicas.
-- PVCs providing `1Gi` (default) disks mounted at `/app/raft-data` for each node.
+### 4. Verify the Deployment
+Watch the operator automatically create the necessary resources:
+```bash
+# Check the custom resource
+kubectl get kvclusters
 
-You can verify the created pods:
+# Check the StatefulSet and Pods
+kubectl get statefulsets
+kubectl get pods -l app=my-raft-db
 
-```sh
-kubectl get pods -l app=sample-kv-cluster
+# Check the Headless Service
+kubectl get svc my-raft-db-service
 ```
 
-### 🧹 Uninstalling
+## 🧠 Under the Hood: The "Magic" of the Operator
 
-**Delete your `KVCluster` instances:**
+If you look at `internal/controller/kvcluster_controller.go`, you'll see how the operator bridges the gap between Kubernetes infrastructure and the application's internal Raft logic:
 
-```sh
-kubectl delete kvcluster sample-kv-cluster
+```go
+Env: []corev1.EnvVar{
+    { Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{...} },
+    { Name: "NODE_ID", Value: "$(POD_NAME)" },
+    { Name: "SEED_NODE_ID", Value: kvc.Name + "-0" },
+    { Name: "SEED_NODE_ADDR", Value: fmt.Sprintf("%s-0.%s-service.%s.svc.cluster.local:50051", kvc.Name, kvc.Name, kvc.Namespace) },
+}
 ```
+Because StatefulSets guarantee predictable naming (`pod-0`, `pod-1`), the Operator knows exactly what the DNS record of the first node will be *before* it even exists. It injects this DNS record into all pods, allowing `pod-1` and `pod-2` to seamlessly join the cluster leader via gRPC.
 
-**Uninstall CRDs:**
+## 🧹 Cleanup
 
-```sh
+To delete the database cluster and its data:
+```bash
+kubectl delete kvcluster my-raft-db
+```
+*(Note: Because of OwnerReferences, deleting the KVCluster automatically garbage-collects the StatefulSet and Service).*
+
+To uninstall the CRD from the cluster:
+```bash
 make uninstall
 ```
 
-**Undeploy the Operator:**
+## 📜 License
 
-```sh
-make undeploy
-```
-
----
-
-## Under the Hood
-
-When a `KVCluster` is created, the Controller manages a `Service` and a `StatefulSet`.
-
-The operator automatically passes the environment variables needed for your Raft storage nodes to join the cluster. For a cluster named `sample-kv-cluster`, it automatically targets `sample-kv-cluster-0` as the initial seed node. 
-
-- **Seed Node ID:** `sample-kv-cluster-0` 
-- **Seed Node Address:** `sample-kv-cluster-0.sample-kv-cluster-service.<namespace>.svc.cluster.local:50051`
-
-This ensures that newer replicas successfully join the existing Raft consensus group!
-
----
-
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
-
-## License
-
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+This project is licensed under the Apache License 2.0.
